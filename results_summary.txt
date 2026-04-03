@@ -77,12 +77,38 @@ Pipeline: RGB -> YCoCg-R -> CDF 5/3 Wavelet (3 levels) -> MED-DPCM(LL) -> Adapti
        — processes up to 8 bits per loop iteration instead of 1
 
 --------------------------------------------------------------------------------
+  C++ IMPLEMENTATION — SPEED COMPARISON
+--------------------------------------------------------------------------------
+
+  Bit-identical C++ reimplementation of the full pipeline.
+  Same algorithms, same compressed output, dramatically faster execution.
+
+  C++ Timing (24 images):
+    Encode :   1.71s   (avg 0.071s per image)
+    Decode :   1.60s   (avg 0.067s per image)
+    Total  :   3.31s   (avg 0.138s per image)
+
+  Python vs C++ Speedup:
+    Encode :  20.88s ->  1.71s   (12.2x faster)
+    Decode :  46.19s ->  1.60s   (28.8x faster)
+    Total  :  67.07s ->  3.31s   (20.3x faster)
+
+  Compression output : BIT-IDENTICAL (same bpp, same compressed sizes)
+  Lossless           : ALL 24 PASS in both implementations
+
+  Full pipeline comparison (original Python -> optimized Python -> C++):
+    Encode : 157.43s -> 20.88s ->  1.71s   (92x total speedup)
+    Decode : 156.46s -> 46.19s ->  1.60s   (98x total speedup)
+    Total  : 313.89s -> 67.07s ->  3.31s   (95x total speedup)
+
+--------------------------------------------------------------------------------
   SYSTEM / TEST INFO
 --------------------------------------------------------------------------------
 
   Test date          : April 2026
   Image set          : Kodak PhotoCD (24 images, 768x512 or 512x768, 24-bit RGB)
   Python             : 3.12
+  C++ compiler       : GCC 6.3.0 (MinGW), -O2
   Platform           : Windows 10
 
 ================================================================================

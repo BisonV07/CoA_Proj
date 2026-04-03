@@ -1,6 +1,6 @@
 # Lossless Wavelet Image Compression
 
-A lossless image compression codec built in Python using the **CDF 5/3 integer wavelet transform** and **adaptive Golomb-Rice entropy coding**. Achieves an average **2.25:1 compression ratio** on the standard Kodak image set with **bit-exact reconstruction**.
+A lossless image compression codec using the **CDF 5/3 integer wavelet transform** and **adaptive Golomb-Rice entropy coding**. Implemented in both Python and C++. Achieves an average **2.25:1 compression ratio** on the standard Kodak image set with **bit-exact reconstruction**.
 
 ## Compression Pipeline
 
@@ -11,7 +11,7 @@ RGB → YCoCg-R → CDF 5/3 Wavelet (3 levels) → MED-DPCM (LL) → Adaptive Go
 | Stage | Description |
 |-------|-------------|
 | **Color Transform** | Reversible YCoCg-R — integer-only arithmetic (adds + shifts), perfectly lossless |
-| **Wavelet Transform** | CDF 5/3 lifting scheme, fully vectorized in NumPy, operates in int32 |
+| **Wavelet Transform** | CDF 5/3 lifting scheme, operates entirely in int32 |
 | **DPCM** | Median Edge Detector (MED) prediction on the final LL subband |
 | **Context Model** | 6-neighbor weighted spatial context + inter-scale parent detail context |
 | **Entropy Coder** | Adaptive Golomb-Rice with escape coding for large values |
@@ -38,6 +38,25 @@ Tested on all 24 standard Kodak PhotoCD images (768×512 / 512×768, 24-bit RGB)
 | Co (chroma-orange) | 2.995 |
 | Cg (chroma-green) | 2.828 |
 
+## Python vs C++ Performance
+
+The C++ implementation produces **bit-identical** compressed output while running dramatically faster:
+
+| Metric | Python | C++ | Speedup |
+|--------|--------|-----|---------|
+| Encode (24 images) | 20.88s | 1.71s | **12.2x** |
+| Decode (24 images) | 46.19s | 1.60s | **28.8x** |
+| Total | 67.07s | 3.31s | **20.3x** |
+| Avg bpp | 10.780 | 10.780 | Identical |
+
+Full pipeline evolution (original unoptimized Python → optimized Python → C++):
+
+| Phase | Original Python | Optimized Python | C++ | Total Speedup |
+|-------|----------------|-----------------|-----|---------------|
+| Encode | 157.43s | 20.88s | 1.71s | **92x** |
+| Decode | 156.46s | 46.19s | 1.60s | **98x** |
+| Total | 313.89s | 67.07s | 3.31s | **95x** |
+
 ## Project Structure
 
 ```
@@ -53,27 +72,32 @@ CoA_Proj/
 │   ├── wavelet_transform.py  # CDF 5/3 integer wavelet (lifting)
 │   ├── entropy_coder.py      # Adaptive Golomb-Rice coder
 │   └── context_model.py      # Spatial context / k-parameter estimation
+├── cpp/
+│   ├── CMakeLists.txt        # Build system (also supports direct g++ build)
+│   ├── main.cpp              # C++ benchmark entry point
+│   ├── codec.hpp             # Full encode / decode pipeline
+│   ├── color_transform.hpp   # Reversible YCoCg-R transform
+│   ├── wavelet_transform.hpp # CDF 5/3 integer wavelet (lifting)
+│   ├── entropy_coder.hpp     # Golomb-Rice coder + BitWriter/BitReader
+│   └── matrix.hpp            # 2D int32 array container
 ├── kodak_images/             # Kodak test images (auto-downloaded)
 └── test_images/              # Synthetic test images
 ```
 
 ## Getting Started
 
-### Prerequisites
+### Python
 
-- Python 3.10+
-- pip
-
-### Installation
+**Prerequisites:** Python 3.10+
 
 ```bash
 pip install -r requirements.txt
-```
 
-### Compress a Single Image
-
-```bash
+# Compress a single image
 python compress.py path/to/image.png
+
+# Run the full Kodak benchmark
+python test_kodak.py
 ```
 
 Use `--max-dim` to resize for quick testing:
@@ -82,27 +106,28 @@ Use `--max-dim` to resize for quick testing:
 python compress.py path/to/image.png --max-dim 256
 ```
 
-The codec will encode and decode the image, save the reconstructed output as `<name>_decoded.png`, and print compression statistics with lossless verification.
+### C++
 
-### Run the Kodak Benchmark
+**Prerequisites:** A C++ compiler with C++14 support (GCC, Clang, or MSVC)
+
+Build with g++ (no CMake required):
 
 ```bash
-python test_kodak.py
+g++ -std=c++14 -O2 -o cpp/benchmark.exe cpp/main.cpp -Icpp
 ```
 
-Downloads all 24 Kodak images (cached in `kodak_images/`), runs encode + decode on each, verifies lossless reconstruction, and prints a detailed summary table.
+Or with CMake:
 
-## Speed
+```bash
+cd cpp && mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build . --config Release
+```
 
-Optimized for speed while preserving bit-identical output:
+Run the benchmark:
 
-| Phase | Time (24 images) | Per Image |
-|-------|-------------------|-----------|
-| Encode | 20.88s | 0.87s |
-| Decode | 46.19s | 1.92s |
-| Total | 67.07s | 2.79s |
+```bash
+./cpp/benchmark.exe kodak_images
+```
 
-Key optimizations applied:
-- Vectorized NumPy pre-computation of the k parameter map (replaces ~2.36M per-pixel function calls)
-- Fully inlined decoder inner loop with Python lists
-- Multi-bit batch operations in BitWriter / BitReader
+The C++ benchmark auto-downloads `stb_image.h` via CMake, or you can place it in `cpp/` manually for direct g++ builds.

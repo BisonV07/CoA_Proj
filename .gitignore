@@ -20,3 +20,6 @@ Desktop.ini
 
 # Decoded output images
 *_decoded.png
+
+# Downloaded third-party headers
+cpp/stb_image.h
