@@ -1,11 +1,11 @@
 # Lossless Wavelet Image Compression
 
-A lossless image compression codec using the **CDF 5/3 integer wavelet transform** and **adaptive Golomb-Rice entropy coding**. Implemented in both Python and C++. Achieves an average **2.25:1 compression ratio** on the standard Kodak image set with **bit-exact reconstruction**.
+A lossless image compression codec using the **CDF 5/3 integer wavelet transform** and **multi-bucket adaptive Golomb-Rice entropy coding**. Implemented in both Python and C++. Achieves an average **2.40:1 compression ratio** (10.094 bpp) on the standard Kodak image set with **bit-exact reconstruction**.
 
 ## Compression Pipeline
 
 ```
-RGB → YCoCg-R → CDF 5/3 Wavelet (3 levels) → MED-DPCM (LL) → Adaptive Golomb-Rice
+RGB → YCoCg-R → CDF 5/3 Wavelet (3 levels) → MED-DPCM (LL) → Multi-Bucket Adaptive Golomb-Rice
 ```
 
 | Stage | Description |
@@ -13,7 +13,7 @@ RGB → YCoCg-R → CDF 5/3 Wavelet (3 levels) → MED-DPCM (LL) → Adaptive Go
 | **Color Transform** | Reversible YCoCg-R — integer-only arithmetic (adds + shifts), perfectly lossless |
 | **Wavelet Transform** | CDF 5/3 lifting scheme, operates entirely in int32 |
 | **DPCM** | Median Edge Detector (MED) prediction on the final LL subband |
-| **Context Model** | 6-neighbor weighted spatial context + inter-scale parent detail context |
+| **Context Model** | 6-neighbor spatial context + gradient-based 16-bucket adaptive model with running statistics |
 | **Entropy Coder** | Adaptive Golomb-Rice with escape coding for large values |
 
 ## Kodak Benchmark Results
@@ -22,40 +22,42 @@ Tested on all 24 standard Kodak PhotoCD images (768×512 / 512×768, 24-bit RGB)
 
 | Metric | Value |
 |--------|-------|
-| Average bpp | 10.780 |
-| Average ratio | 2.246 : 1 |
-| Average savings | 55.1% |
+| Average bpp | 10.094 |
+| Average ratio | 2.395 : 1 |
+| Average savings | 57.9% |
 | Lossless | ALL 24 PASS |
-| Best (kodim03) | 9.090 bpp, 2.640 : 1 |
-| Worst (kodim13) | 13.294 bpp, 1.805 : 1 |
-| Images meeting 2:1 | 20 / 24 |
+| Best (kodim03) | 8.805 bpp, 2.726 : 1 |
+| Worst (kodim13) | 12.261 bpp, 1.957 : 1 |
+| Images meeting 2:1 | 23 / 24 |
 
 ### Per-Channel Average bpp
 
 | Channel | bpp |
 |---------|-----|
-| Y (luma) | 4.955 |
-| Co (chroma-orange) | 2.995 |
-| Cg (chroma-green) | 2.828 |
+| Y (luma) | 4.535 |
+| Co (chroma-orange) | 2.857 |
+| Cg (chroma-green) | 2.699 |
+
+### Improvement over Prior Version
+
+The multi-bucket context model replaced the single per-pixel k estimation, yielding a **0.686 bpp improvement** across the full Kodak set:
+
+| Metric | Prior | Current | Delta |
+|--------|-------|---------|-------|
+| Average bpp | 10.780 | 10.094 | **−0.686** |
+| Average ratio | 2.246 : 1 | 2.395 : 1 | +0.149 |
+| Images ≥ 2:1 | 20 / 24 | 23 / 24 | +3 |
 
 ## Python vs C++ Performance
 
-The C++ implementation produces **bit-identical** compressed output while running dramatically faster:
+The C++ implementation uses the prior single-k algorithm and produces **bit-identical** output at that compression level. It has not yet been updated with the multi-bucket context model.
 
-| Metric | Python | C++ | Speedup |
-|--------|--------|-----|---------|
+| Metric | Python (prior) | C++ | Speedup |
+|--------|----------------|-----|---------|
 | Encode (24 images) | 20.88s | 1.71s | **12.2x** |
 | Decode (24 images) | 46.19s | 1.60s | **28.8x** |
 | Total | 67.07s | 3.31s | **20.3x** |
 | Avg bpp | 10.780 | 10.780 | Identical |
-
-Full pipeline evolution (original unoptimized Python → optimized Python → C++):
-
-| Phase | Original Python | Optimized Python | C++ | Total Speedup |
-|-------|----------------|-----------------|-----|---------------|
-| Encode | 157.43s | 20.88s | 1.71s | **92x** |
-| Decode | 156.46s | 46.19s | 1.60s | **98x** |
-| Total | 313.89s | 67.07s | 3.31s | **95x** |
 
 ## Project Structure
 
@@ -70,7 +72,7 @@ CoA_Proj/
 │   ├── codec.py              # Top-level encode / decode pipeline
 │   ├── color_transform.py    # Reversible YCoCg-R transform
 │   ├── wavelet_transform.py  # CDF 5/3 integer wavelet (lifting)
-│   ├── entropy_coder.py      # Adaptive Golomb-Rice coder
+│   ├── entropy_coder.py      # Multi-bucket adaptive Golomb-Rice coder
 │   └── context_model.py      # Spatial context / k-parameter estimation
 ├── cpp/
 │   ├── CMakeLists.txt        # Build system (also supports direct g++ build)

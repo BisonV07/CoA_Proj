@@ -19,6 +19,9 @@ import numpy as np
 ESCAPE_QUOTIENT = 12
 FIXED_CODE_BITS = 16
 
+_NUM_BUCKETS = 16
+_COLD_THRESHOLD = 4
+
 
 # ---------------------------------------------------------------------------
 # Signed <-> unsigned mapping
@@ -277,30 +280,75 @@ class BitReader:
 # ---------------------------------------------------------------------------
 
 def encode_subband(subband: np.ndarray) -> tuple[int, bytes]:
-    k_map = _precompute_k_map(subband)
     writer = BitWriter()
     arr = subband.tolist()
-    km = k_map.tolist()
     h = len(arr)
+    w = len(arr[0]) if h > 0 else 0
+    bkt_sum = [0] * _NUM_BUCKETS
+    bkt_cnt = [0] * _NUM_BUCKETS
 
     _wr_unary = writer.write_unary
     _wr = writer.write
 
     for r in range(h):
-        row_a = arr[r]
-        row_k = km[r]
-        for c in range(len(row_a)):
-            value = row_a[c]
-            k = row_k[c]
-            mapped = 2 * value if value >= 0 else -2 * value - 1
+        row = arr[r]
+        prev = arr[r - 1] if r > 0 else None
+        prev2 = arr[r - 2] if r > 1 else None
+        for c in range(w):
+            val = row[c]
+
+            tot = 0; cnt = 0; n = 0; wv = 0; nwv = 0
+            if prev is not None:
+                n = prev[c]
+                tot += (n if n >= 0 else -n) << 1; cnt += 2
+            if c > 0:
+                wv = row[c - 1]
+                tot += (wv if wv >= 0 else -wv) << 1; cnt += 2
+            if prev is not None and c > 0:
+                nwv = prev[c - 1]
+                tot += nwv if nwv >= 0 else -nwv; cnt += 1
+            if prev is not None and c + 1 < w:
+                v = prev[c + 1]
+                tot += v if v >= 0 else -v; cnt += 1
+            if prev2 is not None:
+                v = prev2[c]
+                tot += v if v >= 0 else -v; cnt += 1
+            if c > 1:
+                v = row[c - 2]
+                tot += v if v >= 0 else -v; cnt += 1
+
+            if cnt == 0 or tot == 0:
+                spatial_k = 0
+            else:
+                si = tot // cnt
+                spatial_k = (si.bit_length() - 1) if si >= 1 else 0
+                if spatial_k > 14: spatial_k = 14
+
+            mg = abs(n - wv)
+            dg = abs(n - nwv)
+            if dg > mg: mg = dg
+            gq = mg.bit_length() if mg > 0 else 0
+            if gq > 3: gq = 3
+            bkt = gq * 4 + (spatial_k if spatial_k < 4 else 3)
+
+            if bkt_cnt[bkt] >= _COLD_THRESHOLD:
+                bm = bkt_sum[bkt] // bkt_cnt[bkt]
+                k = (bm.bit_length() - 1) if bm >= 1 else 0
+                if k > 14: k = 14
+            else:
+                k = spatial_k
+
+            mapped = 2 * val if val >= 0 else -2 * val - 1
             q = mapped >> k
             if q < ESCAPE_QUOTIENT:
                 _wr_unary(q)
-                if k > 0:
-                    _wr(mapped & ((1 << k) - 1), k)
+                if k > 0: _wr(mapped & ((1 << k) - 1), k)
             else:
                 _wr_unary(ESCAPE_QUOTIENT)
                 _wr(mapped, FIXED_CODE_BITS)
+
+            bkt_sum[bkt] += mapped
+            bkt_cnt[bkt] += 1
 
     return writer.length, writer.to_bytes()
 
@@ -314,6 +362,8 @@ def decode_subband(bitstream_bytes: bytes, total_bits: int,
     reader = BitReader(bitstream_bytes, total_bits)
     h, w = shape
     out = [[0] * w for _ in range(h)]
+    bkt_sum = [0] * _NUM_BUCKETS
+    bkt_cnt = [0] * _NUM_BUCKETS
 
     _rd_unary = reader.read_unary
     _rd = reader.read
@@ -323,51 +373,57 @@ def decode_subband(bitstream_bytes: bytes, total_bits: int,
         prev_row = out[r - 1] if r > 0 else None
         prev2_row = out[r - 2] if r > 1 else None
         for c in range(w):
-            total = 0
-            cnt = 0
+            tot = 0; cnt = 0; n = 0; wv = 0; nwv = 0
             if prev_row is not None:
-                v = prev_row[c]
-                total += (v if v >= 0 else -v) << 1
-                cnt += 2
+                n = prev_row[c]
+                tot += (n if n >= 0 else -n) << 1; cnt += 2
             if c > 0:
-                v = out_row[c - 1]
-                total += (v if v >= 0 else -v) << 1
-                cnt += 2
+                wv = out_row[c - 1]
+                tot += (wv if wv >= 0 else -wv) << 1; cnt += 2
             if prev_row is not None and c > 0:
-                v = prev_row[c - 1]
-                total += v if v >= 0 else -v
-                cnt += 1
+                nwv = prev_row[c - 1]
+                tot += nwv if nwv >= 0 else -nwv; cnt += 1
             if prev_row is not None and c + 1 < w:
                 v = prev_row[c + 1]
-                total += v if v >= 0 else -v
-                cnt += 1
+                tot += v if v >= 0 else -v; cnt += 1
             if prev2_row is not None:
                 v = prev2_row[c]
-                total += v if v >= 0 else -v
-                cnt += 1
+                tot += v if v >= 0 else -v; cnt += 1
             if c > 1:
                 v = out_row[c - 2]
-                total += v if v >= 0 else -v
-                cnt += 1
+                tot += v if v >= 0 else -v; cnt += 1
 
-            if cnt == 0 or total == 0:
-                k = 0
+            if cnt == 0 or tot == 0:
+                spatial_k = 0
             else:
-                si = total // cnt
-                k = (si.bit_length() - 1) if si >= 1 else 0
-                if k > 14:
-                    k = 14
+                si = tot // cnt
+                spatial_k = (si.bit_length() - 1) if si >= 1 else 0
+                if spatial_k > 14: spatial_k = 14
+
+            mg = abs(n - wv)
+            dg = abs(n - nwv)
+            if dg > mg: mg = dg
+            gq = mg.bit_length() if mg > 0 else 0
+            if gq > 3: gq = 3
+            bkt = gq * 4 + (spatial_k if spatial_k < 4 else 3)
+
+            if bkt_cnt[bkt] >= _COLD_THRESHOLD:
+                bm = bkt_sum[bkt] // bkt_cnt[bkt]
+                k = (bm.bit_length() - 1) if bm >= 1 else 0
+                if k > 14: k = 14
+            else:
+                k = spatial_k
 
             q = _rd_unary()
             if q < ESCAPE_QUOTIENT:
-                if k > 0:
-                    mapped = (q << k) | _rd(k)
-                else:
-                    mapped = q
+                mapped = (q << k) | _rd(k) if k > 0 else q
             else:
                 mapped = _rd(FIXED_CODE_BITS)
 
             out_row[c] = -(mapped + 1) // 2 if mapped & 1 else mapped // 2
+
+            bkt_sum[bkt] += mapped
+            bkt_cnt[bkt] += 1
 
     return np.array(out, dtype=np.int32)
 
@@ -378,30 +434,84 @@ def decode_subband(bitstream_bytes: bytes, total_bits: int,
 
 def encode_subband_with_parent(subband: np.ndarray,
                                parent_detail: np.ndarray) -> tuple[int, bytes]:
-    k_map = _precompute_k_map_with_parent(subband, parent_detail)
     writer = BitWriter()
     arr = subband.tolist()
-    km = k_map.tolist()
     h = len(arr)
+    w = len(arr[0]) if h > 0 else 0
+    ph, pw = parent_detail.shape
+    par = np.abs(parent_detail.astype(np.int64)).tolist()
+    bkt_sum = [0] * _NUM_BUCKETS
+    bkt_cnt = [0] * _NUM_BUCKETS
 
     _wr_unary = writer.write_unary
     _wr = writer.write
 
     for r in range(h):
-        row_a = arr[r]
-        row_k = km[r]
-        for c in range(len(row_a)):
-            value = row_a[c]
-            k = row_k[c]
-            mapped = 2 * value if value >= 0 else -2 * value - 1
+        row = arr[r]
+        prev = arr[r - 1] if r > 0 else None
+        prev2 = arr[r - 2] if r > 1 else None
+        pr = r >> 1
+        if pr >= ph: pr = ph - 1
+        par_row = par[pr]
+        for c in range(w):
+            val = row[c]
+
+            tot = 0; cnt = 0; n = 0; wv = 0; nwv = 0
+            if prev is not None:
+                n = prev[c]
+                tot += (n if n >= 0 else -n) << 1; cnt += 2
+            if c > 0:
+                wv = row[c - 1]
+                tot += (wv if wv >= 0 else -wv) << 1; cnt += 2
+            if prev is not None and c > 0:
+                nwv = prev[c - 1]
+                tot += nwv if nwv >= 0 else -nwv; cnt += 1
+            if prev is not None and c + 1 < w:
+                v = prev[c + 1]
+                tot += v if v >= 0 else -v; cnt += 1
+            if prev2 is not None:
+                v = prev2[c]
+                tot += v if v >= 0 else -v; cnt += 1
+            if c > 1:
+                v = row[c - 2]
+                tot += v if v >= 0 else -v; cnt += 1
+
+            pc = c >> 1
+            if pc >= pw: pc = pw - 1
+            tot += par_row[pc]; cnt += 1
+
+            if cnt == 0 or tot == 0:
+                spatial_k = 0
+            else:
+                si = tot // cnt
+                spatial_k = (si.bit_length() - 1) if si >= 1 else 0
+                if spatial_k > 14: spatial_k = 14
+
+            mg = abs(n - wv)
+            dg = abs(n - nwv)
+            if dg > mg: mg = dg
+            gq = mg.bit_length() if mg > 0 else 0
+            if gq > 3: gq = 3
+            bkt = gq * 4 + (spatial_k if spatial_k < 4 else 3)
+
+            if bkt_cnt[bkt] >= _COLD_THRESHOLD:
+                bm = bkt_sum[bkt] // bkt_cnt[bkt]
+                k = (bm.bit_length() - 1) if bm >= 1 else 0
+                if k > 14: k = 14
+            else:
+                k = spatial_k
+
+            mapped = 2 * val if val >= 0 else -2 * val - 1
             q = mapped >> k
             if q < ESCAPE_QUOTIENT:
                 _wr_unary(q)
-                if k > 0:
-                    _wr(mapped & ((1 << k) - 1), k)
+                if k > 0: _wr(mapped & ((1 << k) - 1), k)
             else:
                 _wr_unary(ESCAPE_QUOTIENT)
                 _wr(mapped, FIXED_CODE_BITS)
+
+            bkt_sum[bkt] += mapped
+            bkt_cnt[bkt] += 1
 
     return writer.length, writer.to_bytes()
 
@@ -418,6 +528,8 @@ def decode_subband_with_parent(bitstream_bytes: bytes, total_bits: int,
     out = [[0] * w for _ in range(h)]
     ph, pw = parent_detail.shape
     par = np.abs(parent_detail.astype(np.int64)).tolist()
+    bkt_sum = [0] * _NUM_BUCKETS
+    bkt_cnt = [0] * _NUM_BUCKETS
 
     _rd_unary = reader.read_unary
     _rd = reader.read
@@ -427,60 +539,63 @@ def decode_subband_with_parent(bitstream_bytes: bytes, total_bits: int,
         prev_row = out[r - 1] if r > 0 else None
         prev2_row = out[r - 2] if r > 1 else None
         pr = r >> 1
-        if pr >= ph:
-            pr = ph - 1
+        if pr >= ph: pr = ph - 1
         par_row = par[pr]
         for c in range(w):
-            total = 0
-            cnt = 0
+            tot = 0; cnt = 0; n = 0; wv = 0; nwv = 0
             if prev_row is not None:
-                v = prev_row[c]
-                total += (v if v >= 0 else -v) << 1
-                cnt += 2
+                n = prev_row[c]
+                tot += (n if n >= 0 else -n) << 1; cnt += 2
             if c > 0:
-                v = out_row[c - 1]
-                total += (v if v >= 0 else -v) << 1
-                cnt += 2
+                wv = out_row[c - 1]
+                tot += (wv if wv >= 0 else -wv) << 1; cnt += 2
             if prev_row is not None and c > 0:
-                v = prev_row[c - 1]
-                total += v if v >= 0 else -v
-                cnt += 1
+                nwv = prev_row[c - 1]
+                tot += nwv if nwv >= 0 else -nwv; cnt += 1
             if prev_row is not None and c + 1 < w:
                 v = prev_row[c + 1]
-                total += v if v >= 0 else -v
-                cnt += 1
+                tot += v if v >= 0 else -v; cnt += 1
             if prev2_row is not None:
                 v = prev2_row[c]
-                total += v if v >= 0 else -v
-                cnt += 1
+                tot += v if v >= 0 else -v; cnt += 1
             if c > 1:
                 v = out_row[c - 2]
-                total += v if v >= 0 else -v
-                cnt += 1
+                tot += v if v >= 0 else -v; cnt += 1
 
             pc = c >> 1
-            if pc >= pw:
-                pc = pw - 1
-            total += par_row[pc]
-            cnt += 1
+            if pc >= pw: pc = pw - 1
+            tot += par_row[pc]; cnt += 1
 
-            if cnt == 0 or total == 0:
-                k = 0
+            if cnt == 0 or tot == 0:
+                spatial_k = 0
             else:
-                si = total // cnt
-                k = (si.bit_length() - 1) if si >= 1 else 0
-                if k > 14:
-                    k = 14
+                si = tot // cnt
+                spatial_k = (si.bit_length() - 1) if si >= 1 else 0
+                if spatial_k > 14: spatial_k = 14
+
+            mg = abs(n - wv)
+            dg = abs(n - nwv)
+            if dg > mg: mg = dg
+            gq = mg.bit_length() if mg > 0 else 0
+            if gq > 3: gq = 3
+            bkt = gq * 4 + (spatial_k if spatial_k < 4 else 3)
+
+            if bkt_cnt[bkt] >= _COLD_THRESHOLD:
+                bm = bkt_sum[bkt] // bkt_cnt[bkt]
+                k = (bm.bit_length() - 1) if bm >= 1 else 0
+                if k > 14: k = 14
+            else:
+                k = spatial_k
 
             q = _rd_unary()
             if q < ESCAPE_QUOTIENT:
-                if k > 0:
-                    mapped = (q << k) | _rd(k)
-                else:
-                    mapped = q
+                mapped = (q << k) | _rd(k) if k > 0 else q
             else:
                 mapped = _rd(FIXED_CODE_BITS)
 
             out_row[c] = -(mapped + 1) // 2 if mapped & 1 else mapped // 2
+
+            bkt_sum[bkt] += mapped
+            bkt_cnt[bkt] += 1
 
     return np.array(out, dtype=np.int32)

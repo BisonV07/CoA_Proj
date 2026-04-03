@@ -144,7 +144,7 @@ def decode(encoded: dict) -> np.ndarray:
 
         # 2) Finer levels — use parent detail from just-decoded coarser level
         for lvl in range(coarsest - 1, -1, -1):
-            parent_details = decoded_details[lvl + 1]  # (LH, HL, HH) at coarser
+            parent_details = decoded_details[lvl + 1]
             parent_map = {"LH": parent_details[0],
                           "HL": parent_details[1],
                           "HH": parent_details[2]}
