@@ -1,6 +1,6 @@
 # Lossless Wavelet Image Compression
 
-A lossless image compression codec using the **CDF 5/3 integer wavelet transform** and **multi-bucket adaptive Golomb-Rice entropy coding**. Implemented in both Python and C++. Achieves an average **2.40:1 compression ratio** (10.094 bpp) on the standard Kodak image set with **bit-exact reconstruction**.
+A lossless image compression codec using the **CDF 5/3 integer wavelet transform** and **multi-bucket adaptive Golomb-Rice entropy coding**. Achieves an average **2.40:1 compression ratio** (10.094 bpp) on the standard Kodak image set with **bit-exact reconstruction**.
 
 ## Compression Pipeline
 
@@ -48,17 +48,6 @@ The multi-bucket context model replaced the single per-pixel k estimation, yield
 | Average ratio | 2.246 : 1 | 2.395 : 1 | +0.149 |
 | Images ≥ 2:1 | 20 / 24 | 23 / 24 | +3 |
 
-## Python vs C++ Performance
-
-The C++ implementation uses the prior single-k algorithm and produces **bit-identical** output at that compression level. It has not yet been updated with the multi-bucket context model.
-
-| Metric | Python (prior) | C++ | Speedup |
-|--------|----------------|-----|---------|
-| Encode (24 images) | 20.88s | 1.71s | **12.2x** |
-| Decode (24 images) | 46.19s | 1.60s | **28.8x** |
-| Total | 67.07s | 3.31s | **20.3x** |
-| Avg bpp | 10.780 | 10.780 | Identical |
-
 ## Project Structure
 
 ```
@@ -74,21 +63,11 @@ CoA_Proj/
 │   ├── wavelet_transform.py  # CDF 5/3 integer wavelet (lifting)
 │   ├── entropy_coder.py      # Multi-bucket adaptive Golomb-Rice coder
 │   └── context_model.py      # Spatial context / k-parameter estimation
-├── cpp/
-│   ├── CMakeLists.txt        # Build system (also supports direct g++ build)
-│   ├── main.cpp              # C++ benchmark entry point
-│   ├── codec.hpp             # Full encode / decode pipeline
-│   ├── color_transform.hpp   # Reversible YCoCg-R transform
-│   ├── wavelet_transform.hpp # CDF 5/3 integer wavelet (lifting)
-│   ├── entropy_coder.hpp     # Golomb-Rice coder + BitWriter/BitReader
-│   └── matrix.hpp            # 2D int32 array container
 ├── kodak_images/             # Kodak test images (auto-downloaded)
 └── test_images/              # Synthetic test images
 ```
 
 ## Getting Started
-
-### Python
 
 **Prerequisites:** Python 3.10+
 
@@ -107,29 +86,3 @@ Use `--max-dim` to resize for quick testing:
 ```bash
 python compress.py path/to/image.png --max-dim 256
 ```
-
-### C++
-
-**Prerequisites:** A C++ compiler with C++14 support (GCC, Clang, or MSVC)
-
-Build with g++ (no CMake required):
-
-```bash
-g++ -std=c++14 -O2 -o cpp/benchmark.exe cpp/main.cpp -Icpp
-```
-
-Or with CMake:
-
-```bash
-cd cpp && mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . --config Release
-```
-
-Run the benchmark:
-
-```bash
-./cpp/benchmark.exe kodak_images
-```
-
-The C++ benchmark auto-downloads `stb_image.h` via CMake, or you can place it in `cpp/` manually for direct g++ builds.

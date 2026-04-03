@@ -78,7 +78,7 @@ Enhancement over prior version:
   Images >= 2:1        20 / 24       23 / 24       +3
 
 --------------------------------------------------------------------------------
-  SPEED (Python, multi-bucket context model)
+  SPEED
 --------------------------------------------------------------------------------
 
   Total encode (24 images) :  47.90s   (avg 2.00s per image)
@@ -91,27 +91,12 @@ Enhancement over prior version:
   justifies the speed trade-off.
 
 --------------------------------------------------------------------------------
-  C++ IMPLEMENTATION (prior algorithm, not yet updated)
---------------------------------------------------------------------------------
-
-  The C++ implementation uses the prior single-k algorithm and has not
-  been updated with the multi-bucket context model. Its results reflect
-  the prior compression level (10.780 avg bpp) but with much faster
-  execution.
-
-  C++ Timing (24 images, prior algorithm):
-    Encode :   1.71s   (avg 0.071s per image)
-    Decode :   1.60s   (avg 0.067s per image)
-    Total  :   3.31s   (avg 0.138s per image)
-
---------------------------------------------------------------------------------
   SYSTEM / TEST INFO
 --------------------------------------------------------------------------------
 
   Test date          : April 2026
   Image set          : Kodak PhotoCD (24 images, 768x512 or 512x768, 24-bit RGB)
   Python             : 3.12
-  C++ compiler       : GCC 6.3.0 (MinGW), -O2
   Platform           : Windows 10
 
 ================================================================================
