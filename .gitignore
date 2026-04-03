@@ -1,0 +1,22 @@
+﻿# Installers / binaries
+*.exe
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+
+# IDE / Editor
+.cursor/
+.vscode/
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Decoded output images
+*_decoded.png

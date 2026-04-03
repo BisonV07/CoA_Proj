@@ -1,0 +1,88 @@
+================================================================================
+  LOSSLESS WAVELET IMAGE COMPRESSION — KODAK 24-IMAGE BENCHMARK RESULTS
+  CDF 5/3 Integer Wavelet + Adaptive Golomb-Rice
+================================================================================
+
+Pipeline: RGB -> YCoCg-R -> CDF 5/3 Wavelet (3 levels) -> MED-DPCM(LL) -> Adaptive Golomb-Rice
+
+--------------------------------------------------------------------------------
+  PER-IMAGE RESULTS
+--------------------------------------------------------------------------------
+
+  Image          Size       bpp      Ratio    Savings   Y bpp   Co bpp  Cg bpp   Enc(s)  Dec(s)  Lossless
+  -----------   --------   ------   -------   -------   -----   ------  ------   ------  ------  --------
+  kodim01.png   768x512    11.582   2.072:1   51.7%     5.941   2.807   2.831    0.81    1.70    PASS
+  kodim02.png   768x512    10.453   2.296:1   56.4%     4.670   2.950   2.830    0.77    1.64    PASS
+  kodim03.png   768x512     9.090   2.640:1   62.1%     3.871   2.664   2.553    0.70    1.53    PASS
+  kodim04.png   512x768    10.439   2.299:1   56.5%     4.656   3.018   2.763    0.75    1.63    PASS
+  kodim05.png   768x512    11.942   2.010:1   50.2%     5.722   3.133   3.086    0.81    1.70    PASS
+  kodim06.png   768x512    10.997   2.182:1   54.2%     5.223   2.989   2.782    0.77    1.68    PASS
+  kodim07.png   768x512     9.520   2.521:1   60.3%     4.115   2.751   2.651    0.73    1.71    PASS
+  kodim08.png   768x512    12.576   1.908:1   47.6%     6.115   3.312   3.147    0.91    1.93    PASS
+  kodim09.png   512x768    10.002   2.399:1   58.3%     4.537   2.796   2.666    0.82    1.82    PASS
+  kodim10.png   512x768    10.214   2.350:1   57.4%     4.618   2.897   2.696    0.84    1.93    PASS
+  kodim11.png   768x512    10.494   2.287:1   56.3%     5.044   2.774   2.674    0.91    2.01    PASS
+  kodim12.png   768x512     9.740   2.464:1   59.4%     4.401   2.666   2.670    0.87    1.97    PASS
+  kodim13.png   768x512    13.294   1.805:1   44.6%     6.638   3.384   3.269    1.02    2.21    PASS
+  kodim14.png   768x512    11.394   2.106:1   52.5%     5.557   3.011   2.823    0.95    2.08    PASS
+  kodim15.png   768x512     9.936   2.416:1   58.6%     4.374   2.748   2.812    0.91    1.97    PASS
+  kodim16.png   768x512     9.915   2.421:1   58.7%     4.645   2.718   2.550    0.86    2.05    PASS
+  kodim17.png   512x768    10.088   2.379:1   58.0%     4.649   2.880   2.556    0.89    1.95    PASS
+  kodim18.png   512x768    12.288   1.953:1   48.8%     5.679   3.501   3.105    0.99    2.13    PASS
+  kodim19.png   512x768    10.941   2.193:1   54.4%     5.091   3.140   2.708    0.91    2.08    PASS
+  kodim20.png   768x512    10.314   2.327:1   57.0%     3.956   3.469   2.886    0.89    2.10    PASS
+  kodim21.png   768x512    11.117   2.159:1   53.7%     5.160   3.077   2.877    0.93    2.15    PASS
+  kodim22.png   768x512    11.419   2.102:1   52.4%     5.126   3.178   3.113    0.97    2.13    PASS
+  kodim23.png   768x512     9.529   2.519:1   60.3%     3.879   2.857   2.791    0.86    1.96    PASS
+  kodim24.png   768x512    11.441   2.098:1   52.3%     5.258   3.158   3.023    1.02    2.13    PASS
+
+--------------------------------------------------------------------------------
+  AGGREGATE SUMMARY
+--------------------------------------------------------------------------------
+
+  Average bpp        : 10.780
+  Average ratio      : 2.246:1
+  Average savings    : 55.1%
+  Lossless           : ALL 24 PASS (bit-exact reconstruction)
+
+  Per-channel average bpp:
+    Y  (luma)          : 4.955
+    Co (chroma-orange) : 2.995
+    Cg (chroma-green)  : 2.828
+
+  Best  compression  : kodim03.png  —  9.090 bpp  (2.640:1)
+  Worst compression  : kodim13.png  — 13.294 bpp  (1.805:1)
+  Images meeting 2:1 : 20 / 24
+
+--------------------------------------------------------------------------------
+  SPEED (after optimization)
+--------------------------------------------------------------------------------
+
+  Total encode (24 images) :  20.88s   (avg 0.87s per image)
+  Total decode (24 images) :  46.19s   (avg 1.92s per image)
+  Total time               :  67.07s   (avg 2.79s per image)
+
+  Speed comparison vs original unoptimized code:
+    Encode : 157.43s -> 20.88s   (7.5x faster)
+    Decode : 156.46s -> 46.19s   (3.4x faster)
+    Total  : 313.89s -> 67.07s   (4.7x faster)
+
+  Optimizations applied (speed only, bit-identical output):
+    1. Encoder: vectorized NumPy pre-computation of k parameter map
+       — replaces 2.36M per-pixel function calls with batch array ops
+    2. Decoder: fully inlined inner loop with Python lists
+       — eliminates function call overhead, uses int.bit_length()
+         instead of np.floor(np.log2()) for k estimation
+    3. BitWriter/BitReader: multi-bit batch operations
+       — processes up to 8 bits per loop iteration instead of 1
+
+--------------------------------------------------------------------------------
+  SYSTEM / TEST INFO
+--------------------------------------------------------------------------------
+
+  Test date          : April 2026
+  Image set          : Kodak PhotoCD (24 images, 768x512 or 512x768, 24-bit RGB)
+  Python             : 3.12
+  Platform           : Windows 10
+
+================================================================================
