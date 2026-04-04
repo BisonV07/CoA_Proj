@@ -52,7 +52,8 @@ The multi-bucket context model replaced the single per-pixel k estimation, yield
 
 ```
 CoA_Proj/
-├── compress.py               # Main CLI — compress a single image
+├── compress.py               # CLI — compress a single image
+├── demo.py                   # Interactive GUI demo
 ├── test_kodak.py             # Kodak 24-image benchmark suite
 ├── generate_test_image.py    # Synthetic gradient image generator
 ├── requirements.txt
@@ -73,16 +74,25 @@ CoA_Proj/
 
 ```bash
 pip install -r requirements.txt
+```
 
+### Interactive Demo (GUI)
+
+```bash
+python demo.py
+```
+
+Opens a window where you can select any image, compress it, and view side-by-side original vs decoded along with full compression statistics.
+
+### CLI Usage
+
+```bash
 # Compress a single image
 python compress.py path/to/image.png
 
+# Quick test with resized image
+python compress.py path/to/image.png --max-dim 256
+
 # Run the full Kodak benchmark
 python test_kodak.py
-```
-
-Use `--max-dim` to resize for quick testing:
-
-```bash
-python compress.py path/to/image.png --max-dim 256
 ```
