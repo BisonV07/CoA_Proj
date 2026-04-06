@@ -6,6 +6,7 @@ Enhancements over baseline:
   2. 6-neighbor spatial context with gradient weighting
   3. Inter-scale parent DETAIL context (wavelet-tree based)
   4. Escape coding for large values
+  5. Cross-channel Y context for chroma (Co/Cg) subbands
 
 Speed optimizations (bit-identical output):
   - Encoder: vectorized NumPy pre-computation of k map
@@ -16,11 +17,11 @@ Speed optimizations (bit-identical output):
 import numpy as np
 
 
-ESCAPE_QUOTIENT = 12
+ESCAPE_QUOTIENT = 16
 FIXED_CODE_BITS = 16
 
-_NUM_BUCKETS = 16
-_COLD_THRESHOLD = 4
+_NUM_BUCKETS = 64
+_COLD_THRESHOLD = 2
 
 
 # ---------------------------------------------------------------------------
@@ -328,8 +329,8 @@ def encode_subband(subband: np.ndarray) -> tuple[int, bytes]:
             dg = abs(n - nwv)
             if dg > mg: mg = dg
             gq = mg.bit_length() if mg > 0 else 0
-            if gq > 3: gq = 3
-            bkt = gq * 4 + (spatial_k if spatial_k < 4 else 3)
+            if gq > 7: gq = 7
+            bkt = gq * 8 + (spatial_k if spatial_k < 8 else 7)
 
             if bkt_cnt[bkt] >= _COLD_THRESHOLD:
                 bm = bkt_sum[bkt] // bkt_cnt[bkt]
@@ -349,6 +350,9 @@ def encode_subband(subband: np.ndarray) -> tuple[int, bytes]:
 
             bkt_sum[bkt] += mapped
             bkt_cnt[bkt] += 1
+            if bkt_cnt[bkt] >= 128:
+                bkt_sum[bkt] >>= 1
+                bkt_cnt[bkt] >>= 1
 
     return writer.length, writer.to_bytes()
 
@@ -404,8 +408,8 @@ def decode_subband(bitstream_bytes: bytes, total_bits: int,
             dg = abs(n - nwv)
             if dg > mg: mg = dg
             gq = mg.bit_length() if mg > 0 else 0
-            if gq > 3: gq = 3
-            bkt = gq * 4 + (spatial_k if spatial_k < 4 else 3)
+            if gq > 7: gq = 7
+            bkt = gq * 8 + (spatial_k if spatial_k < 8 else 7)
 
             if bkt_cnt[bkt] >= _COLD_THRESHOLD:
                 bm = bkt_sum[bkt] // bkt_cnt[bkt]
@@ -424,6 +428,9 @@ def decode_subband(bitstream_bytes: bytes, total_bits: int,
 
             bkt_sum[bkt] += mapped
             bkt_cnt[bkt] += 1
+            if bkt_cnt[bkt] >= 128:
+                bkt_sum[bkt] >>= 1
+                bkt_cnt[bkt] >>= 1
 
     return np.array(out, dtype=np.int32)
 
@@ -491,8 +498,8 @@ def encode_subband_with_parent(subband: np.ndarray,
             dg = abs(n - nwv)
             if dg > mg: mg = dg
             gq = mg.bit_length() if mg > 0 else 0
-            if gq > 3: gq = 3
-            bkt = gq * 4 + (spatial_k if spatial_k < 4 else 3)
+            if gq > 7: gq = 7
+            bkt = gq * 8 + (spatial_k if spatial_k < 8 else 7)
 
             if bkt_cnt[bkt] >= _COLD_THRESHOLD:
                 bm = bkt_sum[bkt] // bkt_cnt[bkt]
@@ -512,6 +519,9 @@ def encode_subband_with_parent(subband: np.ndarray,
 
             bkt_sum[bkt] += mapped
             bkt_cnt[bkt] += 1
+            if bkt_cnt[bkt] >= 128:
+                bkt_sum[bkt] >>= 1
+                bkt_cnt[bkt] >>= 1
 
     return writer.length, writer.to_bytes()
 
@@ -577,8 +587,8 @@ def decode_subband_with_parent(bitstream_bytes: bytes, total_bits: int,
             dg = abs(n - nwv)
             if dg > mg: mg = dg
             gq = mg.bit_length() if mg > 0 else 0
-            if gq > 3: gq = 3
-            bkt = gq * 4 + (spatial_k if spatial_k < 4 else 3)
+            if gq > 7: gq = 7
+            bkt = gq * 8 + (spatial_k if spatial_k < 8 else 7)
 
             if bkt_cnt[bkt] >= _COLD_THRESHOLD:
                 bm = bkt_sum[bkt] // bkt_cnt[bkt]
@@ -597,5 +607,368 @@ def decode_subband_with_parent(bitstream_bytes: bytes, total_bits: int,
 
             bkt_sum[bkt] += mapped
             bkt_cnt[bkt] += 1
+            if bkt_cnt[bkt] >= 128:
+                bkt_sum[bkt] >>= 1
+                bkt_cnt[bkt] >>= 1
+
+    return np.array(out, dtype=np.int32)
+
+
+# ---------------------------------------------------------------------------
+# Encode subband with cross-channel Y context (spatial + Y, no parent)
+# ---------------------------------------------------------------------------
+
+def encode_subband_with_cross(subband: np.ndarray,
+                              cross_channel: np.ndarray) -> tuple[int, bytes]:
+    writer = BitWriter()
+    arr = subband.tolist()
+    h = len(arr)
+    w = len(arr[0]) if h > 0 else 0
+    cross = np.abs(cross_channel.astype(np.int64)).tolist()
+    bkt_sum = [0] * _NUM_BUCKETS
+    bkt_cnt = [0] * _NUM_BUCKETS
+
+    _wr_unary = writer.write_unary
+    _wr = writer.write
+
+    for r in range(h):
+        row = arr[r]
+        prev = arr[r - 1] if r > 0 else None
+        prev2 = arr[r - 2] if r > 1 else None
+        cross_row = cross[r]
+        for c in range(w):
+            val = row[c]
+
+            tot = 0; cnt = 0; n = 0; wv = 0; nwv = 0
+            if prev is not None:
+                n = prev[c]
+                tot += (n if n >= 0 else -n) << 1; cnt += 2
+            if c > 0:
+                wv = row[c - 1]
+                tot += (wv if wv >= 0 else -wv) << 1; cnt += 2
+            if prev is not None and c > 0:
+                nwv = prev[c - 1]
+                tot += nwv if nwv >= 0 else -nwv; cnt += 1
+            if prev is not None and c + 1 < w:
+                v = prev[c + 1]
+                tot += v if v >= 0 else -v; cnt += 1
+            if prev2 is not None:
+                v = prev2[c]
+                tot += v if v >= 0 else -v; cnt += 1
+            if c > 1:
+                v = row[c - 2]
+                tot += v if v >= 0 else -v; cnt += 1
+
+            tot += cross_row[c] << 1; cnt += 2
+
+            if cnt == 0 or tot == 0:
+                spatial_k = 0
+            else:
+                si = tot // cnt
+                spatial_k = (si.bit_length() - 1) if si >= 1 else 0
+                if spatial_k > 14: spatial_k = 14
+
+            mg = abs(n - wv)
+            dg = abs(n - nwv)
+            if dg > mg: mg = dg
+            gq = mg.bit_length() if mg > 0 else 0
+            if gq > 7: gq = 7
+            bkt = gq * 8 + (spatial_k if spatial_k < 8 else 7)
+
+            if bkt_cnt[bkt] >= _COLD_THRESHOLD:
+                bm = bkt_sum[bkt] // bkt_cnt[bkt]
+                k = (bm.bit_length() - 1) if bm >= 1 else 0
+                if k > 14: k = 14
+            else:
+                k = spatial_k
+
+            mapped = 2 * val if val >= 0 else -2 * val - 1
+            q = mapped >> k
+            if q < ESCAPE_QUOTIENT:
+                _wr_unary(q)
+                if k > 0: _wr(mapped & ((1 << k) - 1), k)
+            else:
+                _wr_unary(ESCAPE_QUOTIENT)
+                _wr(mapped, FIXED_CODE_BITS)
+
+            bkt_sum[bkt] += mapped
+            bkt_cnt[bkt] += 1
+            if bkt_cnt[bkt] >= 128:
+                bkt_sum[bkt] >>= 1
+                bkt_cnt[bkt] >>= 1
+
+    return writer.length, writer.to_bytes()
+
+
+# ---------------------------------------------------------------------------
+# Decode subband with cross-channel Y context (spatial + Y, no parent)
+# ---------------------------------------------------------------------------
+
+def decode_subband_with_cross(bitstream_bytes: bytes, total_bits: int,
+                              shape: tuple[int, int],
+                              cross_channel: np.ndarray) -> np.ndarray:
+    reader = BitReader(bitstream_bytes, total_bits)
+    h, w = shape
+    out = [[0] * w for _ in range(h)]
+    cross = np.abs(cross_channel.astype(np.int64)).tolist()
+    bkt_sum = [0] * _NUM_BUCKETS
+    bkt_cnt = [0] * _NUM_BUCKETS
+
+    _rd_unary = reader.read_unary
+    _rd = reader.read
+
+    for r in range(h):
+        out_row = out[r]
+        prev_row = out[r - 1] if r > 0 else None
+        prev2_row = out[r - 2] if r > 1 else None
+        cross_row = cross[r]
+        for c in range(w):
+            tot = 0; cnt = 0; n = 0; wv = 0; nwv = 0
+            if prev_row is not None:
+                n = prev_row[c]
+                tot += (n if n >= 0 else -n) << 1; cnt += 2
+            if c > 0:
+                wv = out_row[c - 1]
+                tot += (wv if wv >= 0 else -wv) << 1; cnt += 2
+            if prev_row is not None and c > 0:
+                nwv = prev_row[c - 1]
+                tot += nwv if nwv >= 0 else -nwv; cnt += 1
+            if prev_row is not None and c + 1 < w:
+                v = prev_row[c + 1]
+                tot += v if v >= 0 else -v; cnt += 1
+            if prev2_row is not None:
+                v = prev2_row[c]
+                tot += v if v >= 0 else -v; cnt += 1
+            if c > 1:
+                v = out_row[c - 2]
+                tot += v if v >= 0 else -v; cnt += 1
+
+            tot += cross_row[c] << 1; cnt += 2
+
+            if cnt == 0 or tot == 0:
+                spatial_k = 0
+            else:
+                si = tot // cnt
+                spatial_k = (si.bit_length() - 1) if si >= 1 else 0
+                if spatial_k > 14: spatial_k = 14
+
+            mg = abs(n - wv)
+            dg = abs(n - nwv)
+            if dg > mg: mg = dg
+            gq = mg.bit_length() if mg > 0 else 0
+            if gq > 7: gq = 7
+            bkt = gq * 8 + (spatial_k if spatial_k < 8 else 7)
+
+            if bkt_cnt[bkt] >= _COLD_THRESHOLD:
+                bm = bkt_sum[bkt] // bkt_cnt[bkt]
+                k = (bm.bit_length() - 1) if bm >= 1 else 0
+                if k > 14: k = 14
+            else:
+                k = spatial_k
+
+            q = _rd_unary()
+            if q < ESCAPE_QUOTIENT:
+                mapped = (q << k) | _rd(k) if k > 0 else q
+            else:
+                mapped = _rd(FIXED_CODE_BITS)
+
+            out_row[c] = -(mapped + 1) // 2 if mapped & 1 else mapped // 2
+
+            bkt_sum[bkt] += mapped
+            bkt_cnt[bkt] += 1
+            if bkt_cnt[bkt] >= 128:
+                bkt_sum[bkt] >>= 1
+                bkt_cnt[bkt] >>= 1
+
+    return np.array(out, dtype=np.int32)
+
+
+# ---------------------------------------------------------------------------
+# Encode subband with parent detail + cross-channel Y context
+# ---------------------------------------------------------------------------
+
+def encode_subband_with_parent_and_cross(
+        subband: np.ndarray,
+        parent_detail: np.ndarray,
+        cross_channel: np.ndarray) -> tuple[int, bytes]:
+    writer = BitWriter()
+    arr = subband.tolist()
+    h = len(arr)
+    w = len(arr[0]) if h > 0 else 0
+    ph, pw = parent_detail.shape
+    par = np.abs(parent_detail.astype(np.int64)).tolist()
+    cross = np.abs(cross_channel.astype(np.int64)).tolist()
+    bkt_sum = [0] * _NUM_BUCKETS
+    bkt_cnt = [0] * _NUM_BUCKETS
+
+    _wr_unary = writer.write_unary
+    _wr = writer.write
+
+    for r in range(h):
+        row = arr[r]
+        prev = arr[r - 1] if r > 0 else None
+        prev2 = arr[r - 2] if r > 1 else None
+        pr = r >> 1
+        if pr >= ph: pr = ph - 1
+        par_row = par[pr]
+        cross_row = cross[r]
+        for c in range(w):
+            val = row[c]
+
+            tot = 0; cnt = 0; n = 0; wv = 0; nwv = 0
+            if prev is not None:
+                n = prev[c]
+                tot += (n if n >= 0 else -n) << 1; cnt += 2
+            if c > 0:
+                wv = row[c - 1]
+                tot += (wv if wv >= 0 else -wv) << 1; cnt += 2
+            if prev is not None and c > 0:
+                nwv = prev[c - 1]
+                tot += nwv if nwv >= 0 else -nwv; cnt += 1
+            if prev is not None and c + 1 < w:
+                v = prev[c + 1]
+                tot += v if v >= 0 else -v; cnt += 1
+            if prev2 is not None:
+                v = prev2[c]
+                tot += v if v >= 0 else -v; cnt += 1
+            if c > 1:
+                v = row[c - 2]
+                tot += v if v >= 0 else -v; cnt += 1
+
+            pc = c >> 1
+            if pc >= pw: pc = pw - 1
+            tot += par_row[pc]; cnt += 1
+
+            tot += cross_row[c] << 1; cnt += 2
+
+            if cnt == 0 or tot == 0:
+                spatial_k = 0
+            else:
+                si = tot // cnt
+                spatial_k = (si.bit_length() - 1) if si >= 1 else 0
+                if spatial_k > 14: spatial_k = 14
+
+            mg = abs(n - wv)
+            dg = abs(n - nwv)
+            if dg > mg: mg = dg
+            gq = mg.bit_length() if mg > 0 else 0
+            if gq > 7: gq = 7
+            bkt = gq * 8 + (spatial_k if spatial_k < 8 else 7)
+
+            if bkt_cnt[bkt] >= _COLD_THRESHOLD:
+                bm = bkt_sum[bkt] // bkt_cnt[bkt]
+                k = (bm.bit_length() - 1) if bm >= 1 else 0
+                if k > 14: k = 14
+            else:
+                k = spatial_k
+
+            mapped = 2 * val if val >= 0 else -2 * val - 1
+            q = mapped >> k
+            if q < ESCAPE_QUOTIENT:
+                _wr_unary(q)
+                if k > 0: _wr(mapped & ((1 << k) - 1), k)
+            else:
+                _wr_unary(ESCAPE_QUOTIENT)
+                _wr(mapped, FIXED_CODE_BITS)
+
+            bkt_sum[bkt] += mapped
+            bkt_cnt[bkt] += 1
+            if bkt_cnt[bkt] >= 128:
+                bkt_sum[bkt] >>= 1
+                bkt_cnt[bkt] >>= 1
+
+    return writer.length, writer.to_bytes()
+
+
+# ---------------------------------------------------------------------------
+# Decode subband with parent detail + cross-channel Y context
+# ---------------------------------------------------------------------------
+
+def decode_subband_with_parent_and_cross(
+        bitstream_bytes: bytes, total_bits: int,
+        shape: tuple[int, int],
+        parent_detail: np.ndarray,
+        cross_channel: np.ndarray) -> np.ndarray:
+    reader = BitReader(bitstream_bytes, total_bits)
+    h, w = shape
+    out = [[0] * w for _ in range(h)]
+    ph, pw = parent_detail.shape
+    par = np.abs(parent_detail.astype(np.int64)).tolist()
+    cross = np.abs(cross_channel.astype(np.int64)).tolist()
+    bkt_sum = [0] * _NUM_BUCKETS
+    bkt_cnt = [0] * _NUM_BUCKETS
+
+    _rd_unary = reader.read_unary
+    _rd = reader.read
+
+    for r in range(h):
+        out_row = out[r]
+        prev_row = out[r - 1] if r > 0 else None
+        prev2_row = out[r - 2] if r > 1 else None
+        pr = r >> 1
+        if pr >= ph: pr = ph - 1
+        par_row = par[pr]
+        cross_row = cross[r]
+        for c in range(w):
+            tot = 0; cnt = 0; n = 0; wv = 0; nwv = 0
+            if prev_row is not None:
+                n = prev_row[c]
+                tot += (n if n >= 0 else -n) << 1; cnt += 2
+            if c > 0:
+                wv = out_row[c - 1]
+                tot += (wv if wv >= 0 else -wv) << 1; cnt += 2
+            if prev_row is not None and c > 0:
+                nwv = prev_row[c - 1]
+                tot += nwv if nwv >= 0 else -nwv; cnt += 1
+            if prev_row is not None and c + 1 < w:
+                v = prev_row[c + 1]
+                tot += v if v >= 0 else -v; cnt += 1
+            if prev2_row is not None:
+                v = prev2_row[c]
+                tot += v if v >= 0 else -v; cnt += 1
+            if c > 1:
+                v = out_row[c - 2]
+                tot += v if v >= 0 else -v; cnt += 1
+
+            pc = c >> 1
+            if pc >= pw: pc = pw - 1
+            tot += par_row[pc]; cnt += 1
+
+            tot += cross_row[c] << 1; cnt += 2
+
+            if cnt == 0 or tot == 0:
+                spatial_k = 0
+            else:
+                si = tot // cnt
+                spatial_k = (si.bit_length() - 1) if si >= 1 else 0
+                if spatial_k > 14: spatial_k = 14
+
+            mg = abs(n - wv)
+            dg = abs(n - nwv)
+            if dg > mg: mg = dg
+            gq = mg.bit_length() if mg > 0 else 0
+            if gq > 7: gq = 7
+            bkt = gq * 8 + (spatial_k if spatial_k < 8 else 7)
+
+            if bkt_cnt[bkt] >= _COLD_THRESHOLD:
+                bm = bkt_sum[bkt] // bkt_cnt[bkt]
+                k = (bm.bit_length() - 1) if bm >= 1 else 0
+                if k > 14: k = 14
+            else:
+                k = spatial_k
+
+            q = _rd_unary()
+            if q < ESCAPE_QUOTIENT:
+                mapped = (q << k) | _rd(k) if k > 0 else q
+            else:
+                mapped = _rd(FIXED_CODE_BITS)
+
+            out_row[c] = -(mapped + 1) // 2 if mapped & 1 else mapped // 2
+
+            bkt_sum[bkt] += mapped
+            bkt_cnt[bkt] += 1
+            if bkt_cnt[bkt] >= 128:
+                bkt_sum[bkt] >>= 1
+                bkt_cnt[bkt] >>= 1
 
     return np.array(out, dtype=np.int32)
