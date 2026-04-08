@@ -28,7 +28,7 @@ Tested on all 24 standard Kodak PhotoCD images (768×512 / 512×768, 24-bit RGB)
 | Lossless | ALL 24 PASS |
 | Best (kodim03) | 8.704 bpp, 2.757 : 1 |
 | Worst (kodim13) | 12.073 bpp, 1.988 : 1 |
-| Images meeting 2:1 | 24 / 24 |
+| Images meeting 2:1 | 23 / 24 |
 
 ### Per-Channel Average bpp
 
